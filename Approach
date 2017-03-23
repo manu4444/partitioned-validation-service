@@ -1,0 +1,98 @@
+Steps for the development:
+
+1. Start the server process (CertifierReplica) by reading a config file with each of them knowing about themselves and peer handle.
+    -- Initially, it will in same host with different port number
+
+    They provide two interface "PeerInterface" (to connect to peers) and "CertifierInterface" (to connect to clients)
+
+2. Assign First host to run timeManager service.
+
+
+
+3. Each CertifierReplica will know the range of Node ID it is responsible and the other range manage by which peer server machine.
+   -- Initially, the partition-table will be empty
+
+
+4. After successful finish of step 3, start Client process
+
+
+
+5. Client will give a set of read/write set to randomly chosen server.
+
+
+
+6. Actions by server on receiving validation request from the client:
+
+        a. create COORDINATOR object for each request.
+
+           --Transaction Id will be assigned to each request. It could be obained from Time Manager ?
+
+        b. each COORDINATOR object will create "partitionedRWSetMap" about the server to RWset mapping of client request.
+        c. each newly created COORDINATOR object will create new "CoordinationRequestStatus" (CRS) and register itself to "RequestStatusTracker" which is global to the host.
+
+
+        d. CRS initiliased to PHASE_1 and validation request will be sent to each server with RWSetDetail it will act upon. It will also add each request sent in reqStatusMap
+           (this will be used in future to check complete status)
+           Each thread picked from the global executorPool to do the validation.
+           Coordinator will be waiting for the PHASE_1_COMPLETE response.
+
+
+
+7. Action by peer server on receiving validation request
+
+
+        a. Will create new request "validationRequest" and add to global "validationReqTracker" (assigned to each host).
+        b. Calls the validate method of the global Validator object passing RWSet
+
+
+
+
+8. Actions by the validator's validate method
+
+        a.  Try to get the lock on the RWSet and set lockStatus as 'AQUIRED' for each entry of R/W in "validationRequest" object.
+            If any one aquire lock fails, send ABORT or ALL_LOCKS_ACQUIRED. This status is updated in validationStatus field in that "validationRequest"
+
+
+
+9. For each of the reponse received from each peer to the coordinator, coordinator do following processing.
+
+        a. Increment its cmtVoteCnt for ALL_LOCKS_ACQUIRED message. If cmtVoteCnt becomes size of total peer request sent, status of that CRS will be PHASE_1_COMPLETE
+            and validationOutcome will be ALL_LOCKS_ACQUIRED
+        b. status of that CRS will be PHASE_1_COMPLETE for ABORT message and validationOutcome will be set to ABORT
+
+        Coordinator will be woken once its status changes to PHASE_1_COMPLETE
+
+
+10. Depending on the validationStatus received by cordinator, it will abort or commit
+            -- In case of abort, it will call abort of each peer passing the transactionId() // Abort function is missing in validator
+            -- In case of commit, it will obtain the commit timestamp and commit
+
+
+Note: Process of acquiring and releasing lock is pending
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+Time Manager Service (TMS):
+
+As discussed with prof:
+
+1.  Client will be piggy-backing the STS value when they receive response from the server. They will be making start request with this STS.
+
+2.  Coordinator will ask for STS and CTC immediately on receiving request from the client. On completion of phase one, if the response is abort, it will immediately send such message to the client with STS
+    and send reportCompletion to Time Manager so that it can advance its STS.
+
+
+
+1. Client before making request to the coordinator, first get (STS)start_timestamp from TMS (seq number upto which transaction have been committed to the system)
+
+2. TMS is responsible for providing the Transaction ID requested by each coordinator. It should be returned to the client after finishing execution.
+
+3. When Coordinator make sure all locks are granted, it ask for commit_timestamp from the TMS. TMS keep track of granted commit_timestamp and increment it and give value to it.
+   Coordinator tell all peer to update with this commit_timestamp the RW set.
+
+4. Once coordinator received success of updation, it notifies TMS and TMS increment STS.
+
+
